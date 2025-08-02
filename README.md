@@ -4,11 +4,63 @@ A lightweight, generic enumeration library for Go that provides type-safe enums 
 
 ## Features
 
-- Generic type-safe enumerations
-- Automatic JSON and YAML marshalling/unmarshalling
-- Optimized lookup performance (linear search for small enums, map-based for large ones)
-- String conversion support
-- Zero dependencies for core functionality
+- **Generic type-safe enumerations** with compile-time safety
+- **Comprehensive marshalling support**: JSON, YAML, Text, Binary, and SQL formats
+- **Database integration**: Direct support for `database/sql` with `driver.Valuer` and `sql.Scanner`
+- **Optimized performance**: Automatic selection between linear search (small enums) and map-based lookup (large enums)
+- **String conversion support** with bidirectional mapping
+- **Structured error handling** with specific error types for better debugging
+- **Zero dependencies** for core functionality (SQL requires `database/sql` from standard library)
+
+---
+
+## Error Handling
+
+The library provides structured error types that implement Go's standard error interfaces, making it easy to handle specific error conditions:
+
+```go
+package main
+
+import (
+    "errors"
+    "fmt"
+    "github.com/gmllt/enum"
+)
+
+func main() {
+    wrapper := enum.NewWrapper[int]("red", "green", "blue")
+    
+    // Handle invalid enum values
+    err := wrapper.UnmarshalJSON([]byte(`"yellow"`))
+    if err != nil {
+        var invalidErr *enum.ErrInvalidEnumValue
+        if errors.As(err, &invalidErr) {
+            fmt.Printf("Invalid value: %s\n", invalidErr.Value)
+            fmt.Printf("Valid values: %v\n", invalidErr.ValidValues)
+            // Output: Invalid value: yellow
+            //         Valid values: [red green blue]
+        }
+    }
+    
+    // Handle binary data errors
+    err = wrapper.UnmarshalBinary([]byte{})
+    if err != nil {
+        var binaryErr *enum.ErrBinaryDataTooShort
+        if errors.As(err, &binaryErr) {
+            fmt.Printf("Expected %d bytes, got %d\n", binaryErr.Expected, binaryErr.Actual)
+        }
+    }
+}
+```
+
+### Available Error Types
+
+| Error Type | Description | Use Case |
+|------------|-------------|----------|
+| `ErrInvalidEnumValue` | Invalid enum value during unmarshalling | JSON/YAML/Text/Binary unmarshalling with invalid values |
+| `ErrBinaryDataTooShort` | Binary data too short to be valid | Binary unmarshalling with insufficient data |
+| `ErrBinaryDataTruncated` | Binary data truncated or corrupted | Binary unmarshalling with incomplete data |
+| `ErrLabelTooLong` | Label exceeds maximum length for binary encoding | Binary marshalling with very long labels |
 
 ---
 
@@ -258,6 +310,130 @@ func CustomUnmarshal[T enum.Value](w *enum.Wrapper[T], data []byte) error {
 
 This approach gives you full flexibility to implement any marshalling format while maintaining type safety and leveraging the existing enum functionality.
 
+### Built-in Marshalling Interfaces
+
+The `Wrapper[T]` type implements several standard Go marshalling interfaces for maximum compatibility:
+
+| **Interface**       | **Package**           | **Use Cases**                            |
+|---------------------|-----------------------|------------------------------------------|
+| **JSON**            | encoding/json         | REST APIs, configuration files          |
+| **YAML**            | gopkg.in/yaml.v3      | Configuration files, Kubernetes manifests |
+| **Text**            | encoding              | INI files, TOML, query strings, SQL mapping |
+| **Binary**          | encoding              | Binary streams, caches, performance-critical applications |
+
+#### Text Marshalling Example
+
+```go
+import "encoding"
+
+func main() {
+    status := enum.NewWrapper[int]("idle", "running", "stopped")
+    status.Set(1) // "running"
+    
+    // Implements encoding.TextMarshaler
+    textBytes, err := status.MarshalText()
+    if err == nil {
+        fmt.Println(string(textBytes)) // Output: "running"
+    }
+    
+    // Implements encoding.TextUnmarshaler
+    newStatus := enum.NewWrapper[int]("idle", "running", "stopped")
+    err = newStatus.UnmarshalText([]byte("stopped"))
+    if err == nil {
+        fmt.Println(newStatus.Get()) // Output: 2
+    }
+}
+```
+
+#### Binary Marshalling Example
+
+```go
+func main() {
+    priority := enum.NewWrapper[int]("low", "medium", "high", "critical")
+    priority.Set(3) // "critical"
+    
+    // Implements encoding.BinaryMarshaler
+    binaryData, err := priority.MarshalBinary()
+    if err == nil {
+        fmt.Printf("Binary data: %v\n", binaryData)
+        // Output: Binary data: [0 8 99 114 105 116 105 99 97 108]
+        //         (length prefix: [0 8] (big-endian 8), followed by "critical")
+    }
+    
+    // Implements encoding.BinaryUnmarshaler
+    newPriority := enum.NewWrapper[int]("low", "medium", "high", "critical")
+    err = newPriority.UnmarshalBinary(binaryData)
+    if err == nil {
+        fmt.Println(newPriority.String()) // Output: "critical"
+    }
+}
+```
+
+#### SQL Database Integration
+
+The library provides seamless integration with Go's `database/sql` package through `driver.Valuer` and `sql.Scanner` interfaces:
+
+```go
+package main
+
+import (
+    "database/sql"
+    "fmt"
+    "github.com/gmllt/enum"
+    _ "github.com/lib/pq" // or your preferred database driver
+)
+
+func main() {
+    db, _ := sql.Open("postgres", "your-connection-string")
+    defer db.Close()
+
+    // Create table with enum column
+    _, err := db.Exec(`
+        CREATE TABLE IF NOT EXISTS orders (
+            id SERIAL PRIMARY KEY,
+            status TEXT NOT NULL
+        )
+    `)
+
+    status := enum.NewWrapper[int]("pending", "processing", "shipped", "delivered")
+    status.Set(1) // "processing"
+
+    // Insert enum value - automatically converts to string for SQL
+    _, err = db.Exec("INSERT INTO orders (status) VALUES ($1)", &status)
+    if err != nil {
+        fmt.Printf("Insert error: %v\n", err)
+        return
+    }
+
+    // Query enum value - automatically scans from SQL string
+    var retrievedStatus enum.Wrapper[int]
+    retrievedStatus.Enum = enum.NewEnum[int]("pending", "processing", "shipped", "delivered")
+    
+    err = db.QueryRow("SELECT status FROM orders WHERE id = $1", 1).Scan(&retrievedStatus)
+    if err != nil {
+        fmt.Printf("Query error: %v\n", err)
+        return
+    }
+
+    fmt.Printf("Retrieved status: %s (value: %d)\n", retrievedStatus.String(), retrievedStatus.Get())
+    // Output: Retrieved status: processing (value: 1)
+}
+```
+
+**SQL Marshalling Details:**
+- Implements `driver.Valuer`: Converts enum values to strings for database storage
+- Implements `sql.Scanner`: Converts database strings back to enum values
+- NULL values are converted to the zero value (0) of the enum
+- Invalid values return descriptive errors with valid options
+- Works with any SQL database supported by Go's `database/sql`
+
+#### Use Cases for Different Marshalling Types
+
+- **JSON/YAML**: Web APIs, configuration files, data interchange
+- **Text**: Configuration parsers (INI, TOML), URL query parameters, database field mapping
+- **Binary**: High-performance caching, network protocols, embedded systems
+- **SQL**: Database storage, ORM integration, data persistenceThe binary format uses length-prefixed strings for efficiency and safety, making it suitable for performance-critical applications while remaining cross-platform compatible.
+
 ---
 
 ## API Reference
@@ -281,6 +457,12 @@ This approach gives you full flexibility to implement any marshalling format whi
 - `UnmarshalJSON(b []byte) error` - JSON unmarshalling
 - `MarshalYAML() (any, error)` - YAML marshalling
 - `UnmarshalYAML(unmarshal func(any) error) error` - YAML unmarshalling
+- `MarshalText() ([]byte, error)` - Text marshalling (encoding.TextMarshaler)
+- `UnmarshalText(text []byte) error` - Text unmarshalling (encoding.TextUnmarshaler)
+- `MarshalBinary() ([]byte, error)` - Binary marshalling (encoding.BinaryMarshaler)
+- `UnmarshalBinary(data []byte) error` - Binary unmarshalling (encoding.BinaryUnmarshaler)
+- `Value() (driver.Value, error)` - SQL value conversion (driver.Valuer)
+- `Scan(src any) error` - SQL scanning (sql.Scanner)
 
 ---
 
