@@ -1,6 +1,8 @@
 package enum
 
 import (
+	"database/sql/driver"
+	"encoding/binary"
 	"encoding/json"
 	"reflect"
 	"testing"
@@ -20,8 +22,8 @@ func TestNewWrapper(t *testing.T) {
 	}
 
 	// Default value should be zero
-	if wrapper.Value != 0 {
-		t.Errorf("expected default value 0, got %d", wrapper.Value)
+	if wrapper.Current != 0 {
+		t.Errorf("expected default value 0, got %d", wrapper.Current)
 	}
 }
 
@@ -58,7 +60,7 @@ func TestWrapperString(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			wrapper.Value = tt.value
+			wrapper.Current = tt.value
 			result := wrapper.String()
 
 			if result != tt.expected {
@@ -112,9 +114,9 @@ func TestWrapperGetSet(t *testing.T) {
 		t.Errorf("expected value 2, got %d", wrapper.Get())
 	}
 
-	// Test that internal Value field is also updated
-	if wrapper.Value != 2 {
-		t.Errorf("expected internal Value 2, got %d", wrapper.Value)
+	// Test that internal Current field is also updated
+	if wrapper.Current != 2 {
+		t.Errorf("expected internal Current 2, got %d", wrapper.Current)
 	}
 }
 
@@ -196,7 +198,7 @@ func TestWrapperJSONUnmarshal(t *testing.T) {
 			name:        "invalid animal",
 			input:       `"elephant"`,
 			expectedVal: 0,
-			expectError: false, // Returns zero value, no error
+			expectError: true, // Now returns error for invalid values
 		},
 		{
 			name:        "invalid JSON",
@@ -314,7 +316,7 @@ func TestWrapperYAMLUnmarshal(t *testing.T) {
 			name:        "invalid size",
 			input:       "huge",
 			expectedVal: 0,
-			expectError: false, // Returns zero value, no error
+			expectError: true, // Now returns error for invalid values
 		},
 		{
 			name:        "non-string input",
@@ -447,5 +449,351 @@ func TestWrapperConcurrency(t *testing.T) {
 	// Verify wrapper state is still consistent
 	if wrapper.Get() != 1 {
 		t.Errorf("expected value 1 after concurrent operations, got %d", wrapper.Get())
+	}
+}
+
+// TestTextMarshalling tests encoding.TextMarshaler/TextUnmarshaler interfaces
+func TestTextMarshalling(t *testing.T) {
+	wrapper := NewWrapper[int]("first", "second", "third")
+	wrapper.Set(1) // "second"
+
+	// Test MarshalText
+	textBytes, err := wrapper.MarshalText()
+	if err != nil {
+		t.Errorf("MarshalText failed: %v", err)
+		return
+	}
+
+	expected := "second"
+	if string(textBytes) != expected {
+		t.Errorf("expected %q, got %q", expected, string(textBytes))
+	}
+
+	// Test UnmarshalText
+	newWrapper := NewWrapper[int]("first", "second", "third")
+	err = newWrapper.UnmarshalText([]byte("third"))
+	if err != nil {
+		t.Errorf("UnmarshalText failed: %v", err)
+		return
+	}
+
+	if newWrapper.Get() != 2 {
+		t.Errorf("expected value 2, got %d", newWrapper.Get())
+	}
+
+	// Test round trip
+	textBytes2, err := newWrapper.MarshalText()
+	if err != nil {
+		t.Errorf("MarshalText round trip failed: %v", err)
+		return
+	}
+
+	if string(textBytes2) != "third" {
+		t.Errorf("expected %q, got %q", "third", string(textBytes2))
+	}
+}
+
+// TestBinaryMarshalling tests encoding.BinaryMarshaler/BinaryUnmarshaler interfaces
+func TestBinaryMarshalling(t *testing.T) {
+	wrapper := NewWrapper[int]("alpha", "beta", "gamma")
+	wrapper.Set(2) // "gamma"
+
+	// Test MarshalBinary
+	binaryData, err := wrapper.MarshalBinary()
+	if err != nil {
+		t.Errorf("MarshalBinary failed: %v", err)
+		return
+	}
+
+	// Verify binary format: 2-byte length prefix (big-endian) + string
+	expectedLen := uint16(len("gamma"))
+	if len(binaryData) < 2 {
+		t.Errorf("binary data too short: expected at least 2 bytes, got %d", len(binaryData))
+		return
+	}
+
+	actualLen := binary.BigEndian.Uint16(binaryData[0:2])
+	if actualLen != expectedLen {
+		t.Errorf("expected length prefix %d, got %d", expectedLen, actualLen)
+		return
+	}
+
+	actualLabel := string(binaryData[2:])
+	if actualLabel != "gamma" {
+		t.Errorf("expected label %q, got %q", "gamma", actualLabel)
+	}
+
+	// Test UnmarshalBinary
+	newWrapper := NewWrapper[int]("alpha", "beta", "gamma")
+
+	// Create binary data for "beta" (index 1) - 2-byte length prefix (big-endian)
+	testData := []byte{0, 4, 'b', 'e', 't', 'a'} // length 4 (big-endian) + "beta"
+	err = newWrapper.UnmarshalBinary(testData)
+	if err != nil {
+		t.Errorf("UnmarshalBinary failed: %v", err)
+		return
+	}
+
+	if newWrapper.Get() != 1 {
+		t.Errorf("expected value 1, got %d", newWrapper.Get())
+	}
+
+	// Test round trip
+	binaryData2, err := newWrapper.MarshalBinary()
+	if err != nil {
+		t.Errorf("MarshalBinary round trip failed: %v", err)
+		return
+	}
+
+	// Should match our test data
+	if len(binaryData2) != len(testData) {
+		t.Errorf("expected binary length %d, got %d", len(testData), len(binaryData2))
+		return
+	}
+
+	for i, b := range testData {
+		if binaryData2[i] != b {
+			t.Errorf("binary data mismatch at index %d: expected %d, got %d", i, b, binaryData2[i])
+		}
+	}
+}
+
+// TestTextUnmarshalInvalidValue tests text unmarshalling with invalid values
+func TestTextUnmarshalInvalidValue(t *testing.T) {
+	wrapper := NewWrapper[int]("valid1", "valid2")
+
+	err := wrapper.UnmarshalText([]byte("invalid"))
+	if err == nil {
+		t.Errorf("UnmarshalText should fail with invalid value")
+		return
+	}
+
+	// Error is expected, test passes
+}
+
+// TestBinaryUnmarshalInvalidData tests binary unmarshalling with invalid data
+func TestBinaryUnmarshalInvalidData(t *testing.T) {
+	wrapper := NewWrapper[int]("valid1", "valid2")
+
+	tests := []struct {
+		name string
+		data []byte
+	}{
+		{
+			name: "empty data",
+			data: []byte{},
+		},
+		{
+			name: "truncated data",
+			data: []byte{0, 10, 'a', 'b'}, // claims length 10 (2-byte big-endian) but only has 2 chars
+		},
+		{
+			name: "invalid label",
+			data: []byte{0, 7, 'i', 'n', 'v', 'a', 'l', 'i', 'd'}, // 2-byte length prefix + "invalid"
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := wrapper.UnmarshalBinary(tt.data)
+			if err == nil {
+				t.Errorf("UnmarshalBinary should fail with invalid data for test case: %s", tt.name)
+				return
+			}
+			// Error is expected for invalid data, test passes
+		})
+	}
+}
+
+// TestAllMarshallingInterfaces tests that wrapper implements all expected interfaces
+func TestAllMarshallingInterfaces(t *testing.T) {
+	wrapper := NewWrapper[int]("test")
+
+	// Test that wrapper implements all marshalling interfaces
+	var _ json.Marshaler = wrapper
+	var _ json.Unmarshaler = &wrapper
+	var _ driver.Valuer = wrapper
+	var _ driver.Valuer = &wrapper // Valuer works on both value and pointer
+	// Note: sql.Scanner requires pointer receiver, so test with pointer
+	// Note: yaml interfaces would need yaml package import to test, but they're implemented
+
+	// These should compile if wrapper implements the interfaces
+	_, err1 := wrapper.MarshalText()
+	_, err2 := wrapper.MarshalBinary()
+	_, err3 := wrapper.Value()
+	err4 := wrapper.UnmarshalText([]byte("test"))
+	err5 := wrapper.UnmarshalBinary([]byte{0, 4, 't', 'e', 's', 't'}) // 2-byte length prefix + "test"
+	err6 := wrapper.Scan("test")
+
+	if err1 != nil || err2 != nil || err3 != nil || err4 != nil || err5 != nil || err6 != nil {
+		t.Errorf("marshalling interfaces should work without errors")
+	}
+}
+
+// TestWrapperSQLValue tests SQL Value implementation
+func TestWrapperSQLValue(t *testing.T) {
+	wrapper := NewWrapper[int]("red", "green", "blue")
+
+	tests := []struct {
+		name     string
+		value    int
+		expected driver.Value
+		hasError bool
+	}{
+		{
+			name:     "valid first value",
+			value:    0,
+			expected: "red",
+			hasError: false,
+		},
+		{
+			name:     "valid middle value",
+			value:    1,
+			expected: "green",
+			hasError: false,
+		},
+		{
+			name:     "valid last value",
+			value:    2,
+			expected: "blue",
+			hasError: false,
+		},
+		{
+			name:     "invalid value",
+			value:    5,
+			expected: nil,
+			hasError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			wrapper.Current = tt.value
+			result, err := wrapper.Value()
+
+			if tt.hasError {
+				if err == nil {
+					t.Error("expected error, got nil")
+				}
+				return
+			}
+
+			if err != nil {
+				t.Errorf("unexpected error: %v", err)
+				return
+			}
+
+			if result != tt.expected {
+				t.Errorf("expected %v, got %v", tt.expected, result)
+			}
+		})
+	}
+}
+
+// TestWrapperSQLScan tests SQL Scan implementation
+func TestWrapperSQLScan(t *testing.T) {
+	wrapper := NewWrapper[int]("alpha", "beta", "gamma")
+
+	tests := []struct {
+		name          string
+		src           any
+		expectedValue int
+		hasError      bool
+	}{
+		{
+			name:          "scan string first",
+			src:           "alpha",
+			expectedValue: 0,
+			hasError:      false,
+		},
+		{
+			name:          "scan string middle",
+			src:           "beta",
+			expectedValue: 1,
+			hasError:      false,
+		},
+		{
+			name:          "scan string last",
+			src:           "gamma",
+			expectedValue: 2,
+			hasError:      false,
+		},
+		{
+			name:          "scan bytes",
+			src:           []byte("alpha"),
+			expectedValue: 0,
+			hasError:      false,
+		},
+		{
+			name:          "scan nil",
+			src:           nil,
+			expectedValue: 0,
+			hasError:      false,
+		},
+		{
+			name:     "scan invalid string",
+			src:      "invalid",
+			hasError: true,
+		},
+		{
+			name:     "scan invalid type",
+			src:      123,
+			hasError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			wrapper.Current = 999 // Set to invalid value to ensure scan works
+			err := wrapper.Scan(tt.src)
+
+			if tt.hasError {
+				if err == nil {
+					t.Error("expected error, got nil")
+				}
+				return
+			}
+
+			if err != nil {
+				t.Errorf("unexpected error: %v", err)
+				return
+			}
+
+			if wrapper.Current != tt.expectedValue {
+				t.Errorf("expected value %d, got %d", tt.expectedValue, wrapper.Current)
+			}
+		})
+	}
+}
+
+// TestWrapperSQLRoundTrip tests SQL Value/Scan round trip
+func TestWrapperSQLRoundTrip(t *testing.T) {
+	wrapper1 := NewWrapper[int]("one", "two", "three")
+	wrapper2 := NewWrapper[int]("one", "two", "three")
+
+	testValues := []int{0, 1, 2}
+
+	for _, value := range testValues {
+		t.Run("round trip", func(t *testing.T) {
+			// Set original value
+			wrapper1.Current = value
+
+			// Convert to SQL value
+			sqlValue, err := wrapper1.Value()
+			if err != nil {
+				t.Fatalf("Value() failed: %v", err)
+			}
+
+			// Scan SQL value back
+			err = wrapper2.Scan(sqlValue)
+			if err != nil {
+				t.Fatalf("Scan() failed: %v", err)
+			}
+
+			// Verify round trip
+			if wrapper1.Current != wrapper2.Current {
+				t.Errorf("round trip failed: original %d, got %d", wrapper1.Current, wrapper2.Current)
+			}
+		})
 	}
 }

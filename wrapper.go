@@ -1,11 +1,15 @@
 package enum
 
-import "github.com/gmllt/enum/internal"
+import (
+	"database/sql/driver"
+
+	"github.com/gmllt/enum/internal"
+)
 
 // Wrapper wraps an Enum and provides JSON/YAML serialization.
 type Wrapper[T Value] struct {
-	Enum  *Enum[T]
-	Value T
+	Enum    *Enum[T]
+	Current T
 }
 
 // NewWrapper creates a new Wrapper with the given labels.
@@ -15,7 +19,7 @@ func NewWrapper[T Value](labels ...string) Wrapper[T] {
 
 // String returns the string representation of the wrapped value.
 func (w Wrapper[T]) String() string {
-	return w.Enum.String(w.Value)
+	return w.Enum.String(w.Current)
 }
 
 // All returns all values of the wrapped enum.
@@ -30,22 +34,22 @@ func (w Wrapper[T]) Labels() []string {
 
 // MarshalJSON implements json.Marshaler.
 func (w Wrapper[T]) MarshalJSON() ([]byte, error) {
-	return internal.ToJSON[T](w.Enum.labels, w.Value)
+	return internal.ToJSON[T](w.Enum.labels, w.Current)
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (w *Wrapper[T]) UnmarshalJSON(b []byte) error {
-	val, err := internal.FromJSON[T](w.Enum.labels, b)
+func (w *Wrapper[T]) UnmarshalJSON(data []byte) error {
+	val, err := internal.FromJSON[T](w.Enum.labels, data)
 	if err != nil {
 		return err
 	}
-	w.Value = val
+	w.Current = val
 	return nil
 }
 
 // MarshalYAML implements yaml.Marshaler.
 func (w Wrapper[T]) MarshalYAML() (any, error) {
-	return internal.ToYAML[T](w.Enum.labels, w.Value)
+	return internal.ToYAML[T](w.Enum.labels, w.Current)
 }
 
 // UnmarshalYAML implements yaml.Unmarshaler.
@@ -54,16 +58,61 @@ func (w *Wrapper[T]) UnmarshalYAML(unmarshal func(any) error) error {
 	if err != nil {
 		return err
 	}
-	w.Value = val
+	w.Current = val
 	return nil
 }
 
-// Get returns the wrapped value.
+// Get returns the current value.
 func (w Wrapper[T]) Get() T {
-	return w.Value
+	return w.Current
 }
 
-// Set sets the wrapped value.
+// Set sets the current value.
 func (w *Wrapper[T]) Set(v T) {
-	w.Value = v
+	w.Current = v
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (w Wrapper[T]) MarshalText() ([]byte, error) {
+	return internal.ToText[T](w.Enum.labels, w.Current)
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (w *Wrapper[T]) UnmarshalText(text []byte) error {
+	val, err := internal.FromText[T](w.Enum.labels, text)
+	if err != nil {
+		return err
+	}
+	w.Current = val
+	return nil
+}
+
+// MarshalBinary implements encoding.BinaryMarshaler.
+func (w Wrapper[T]) MarshalBinary() ([]byte, error) {
+	return internal.ToBinary[T](w.Enum.labels, w.Current)
+}
+
+// UnmarshalBinary implements encoding.BinaryUnmarshaler.
+func (w *Wrapper[T]) UnmarshalBinary(data []byte) error {
+	val, err := internal.FromBinary[T](w.Enum.labels, data)
+	if err != nil {
+		return err
+	}
+	w.Current = val
+	return nil
+}
+
+// Value implements driver.Valuer for SQL integration.
+func (w Wrapper[T]) Value() (driver.Value, error) {
+	return internal.ToSQLValue[T](w.Enum.labels, w.Current)
+}
+
+// Scan implements sql.Scanner for SQL integration.
+func (w *Wrapper[T]) Scan(src any) error {
+	val, err := internal.FromSQLValue[T](w.Enum.labels, src)
+	if err != nil {
+		return err
+	}
+	w.Current = val
+	return nil
 }
