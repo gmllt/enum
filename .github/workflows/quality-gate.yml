@@ -1,0 +1,72 @@
+name: Quality Gate
+
+on:
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  quality-gate:
+    name: Quality Gate
+    runs-on: ubuntu-latest
+    needs: [test, lint, build, benchmark]
+    if: always()
+    
+    steps:
+    - name: Check all jobs status
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const jobs = [
+            { name: 'test', status: '${{ needs.test.result }}' },
+            { name: 'lint', status: '${{ needs.lint.result }}' },
+            { name: 'build', status: '${{ needs.build.result }}' },
+            { name: 'benchmark', status: '${{ needs.benchmark.result }}' }
+          ];
+          
+          let allPassed = true;
+          let report = '## 🚦 Quality Gate Report\n\n';
+          
+          for (const job of jobs) {
+            const emoji = job.status === 'success' ? '✅' : job.status === 'failure' ? '❌' : '⚠️';
+            report += `${emoji} **${job.name}**: ${job.status}\n`;
+            if (job.status !== 'success') {
+              allPassed = false;
+            }
+          }
+          
+          report += '\n---\n\n';
+          
+          if (allPassed) {
+            report += '🎉 **All checks passed!** This PR is ready for review.\n\n';
+            report += '### What was validated:\n';
+            report += '- ✅ All tests pass with coverage report\n';
+            report += '- ✅ Code style and linting checks pass\n';
+            report += '- ✅ Build succeeds on multiple platforms\n';
+            report += '- ✅ Benchmarks complete successfully\n';
+          } else {
+            report += '⚠️ **Some checks failed.** Please review the failing jobs and fix the issues.\n\n';
+            report += 'Click on the failing job(s) above to see detailed error information.\n';
+          }
+          
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: report
+          });
+          
+          if (!allPassed) {
+            core.setFailed('Quality gate failed - some checks did not pass');
+          }
+
+  test:
+    uses: ./.github/workflows/test.yml
+    
+  lint:
+    uses: ./.github/workflows/lint.yml
+    
+  build:
+    uses: ./.github/workflows/build.yml
+    
+  benchmark:
+    uses: ./.github/workflows/benchmark.yml

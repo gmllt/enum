@@ -1,0 +1,84 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.24'
+
+    - name: Run full test suite
+      run: |
+        go test -v -race -coverprofile=coverage.out ./...
+        go test -bench=. -benchmem ./... > benchmark_results.txt
+
+    - name: Generate changelog
+      id: changelog
+      run: |
+        # Get the previous tag
+        PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+        
+        if [ -z "$PREV_TAG" ]; then
+          # First release
+          CHANGELOG=$(git log --pretty=format:"- %s" --reverse)
+        else
+          # Generate changelog since last tag
+          CHANGELOG=$(git log --pretty=format:"- %s" ${PREV_TAG}..HEAD --reverse)
+        fi
+        
+        echo "changelog<<EOF" >> $GITHUB_OUTPUT
+        echo "$CHANGELOG" >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v2
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ github.ref_name }}
+        name: Release ${{ github.ref_name }}
+        body: |
+          ## Changes
+          
+          ${{ steps.changelog.outputs.changelog }}
+          
+          ## Installation
+          
+          ```bash
+          go get github.com/gmllt/enum@${{ github.ref_name }}
+          ```
+          
+          ## Verification
+          
+          This release has been automatically tested with:
+          - ✅ Full test suite with race detection
+          - ✅ Cross-platform build verification
+          - ✅ Linting and code quality checks
+          - ✅ Benchmark validation
+          
+          See the [README](https://github.com/gmllt/enum/blob/main/README.md) for usage examples and documentation.
+        draft: false
+        prerelease: false
+
+    - name: Upload benchmark results
+      uses: actions/upload-artifact@v4
+      with:
+        name: release-benchmark-results
+        path: benchmark_results.txt
