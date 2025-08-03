@@ -798,11 +798,17 @@ func TestWrapperSQLRoundTrip(t *testing.T) {
 	}
 }
 
+// Custom types for ensureEnum testing to avoid registry conflicts
+type (
+	EnsureEnumTestType1 int
+	EnsureEnumTestType2 int
+)
+
 // TestWrapperEnsureEnum tests the lazy initialization of Enum through ensureEnum()
 func TestWrapperEnsureEnum(t *testing.T) {
 	// Create a wrapper with labels but nil Enum (simulating deserialization scenario)
 	labels := []string{"red", "green", "blue"}
-	wrapper := Wrapper[int]{
+	wrapper := Wrapper[EnsureEnumTestType1]{
 		Enum:    nil, // Simulate a deserialized state where Enum might be nil
 		Current: 1,
 		labels:  labels,
@@ -837,23 +843,23 @@ func TestWrapperEnsureEnumWithAllUnmarshalMethods(t *testing.T) {
 
 	testCases := []struct {
 		name   string
-		testFn func(*Wrapper[int]) error
+		testFn func(*Wrapper[EnsureEnumTestType2]) error
 	}{
 		{
 			name: "UnmarshalJSON",
-			testFn: func(w *Wrapper[int]) error {
+			testFn: func(w *Wrapper[EnsureEnumTestType2]) error {
 				return w.UnmarshalJSON([]byte(`"medium"`))
 			},
 		},
 		{
 			name: "UnmarshalText",
-			testFn: func(w *Wrapper[int]) error {
+			testFn: func(w *Wrapper[EnsureEnumTestType2]) error {
 				return w.UnmarshalText([]byte("large"))
 			},
 		},
 		{
 			name: "UnmarshalBinary",
-			testFn: func(w *Wrapper[int]) error {
+			testFn: func(w *Wrapper[EnsureEnumTestType2]) error {
 				// Create binary data for "small" (2-byte length + "small")
 				data := make([]byte, 2+5)
 				binary.BigEndian.PutUint16(data[:2], 5) // length of "small"
@@ -863,7 +869,7 @@ func TestWrapperEnsureEnumWithAllUnmarshalMethods(t *testing.T) {
 		},
 		{
 			name: "Scan",
-			testFn: func(w *Wrapper[int]) error {
+			testFn: func(w *Wrapper[EnsureEnumTestType2]) error {
 				return w.Scan("medium")
 			},
 		},
@@ -872,7 +878,7 @@ func TestWrapperEnsureEnumWithAllUnmarshalMethods(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			// Create wrapper with nil Enum but valid labels
-			wrapper := Wrapper[int]{
+			wrapper := Wrapper[EnsureEnumTestType2]{
 				Enum:    nil,
 				Current: 0,
 				labels:  labels,
