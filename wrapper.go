@@ -1,7 +1,10 @@
 package enum
 
 import (
+	"database/sql"
 	"database/sql/driver"
+	"encoding"
+	"encoding/json"
 
 	"github.com/gmllt/enum/internal"
 )
@@ -11,6 +14,18 @@ type Wrapper[T Value] struct {
 	Enum    *Enum[T]
 	Current T
 }
+
+// Ensure Wrapper implements the necessary interfaces.
+var (
+	_ json.Marshaler             = (*Wrapper[int])(nil)
+	_ json.Unmarshaler           = (*Wrapper[int])(nil)
+	_ encoding.TextMarshaler     = (*Wrapper[int])(nil)
+	_ encoding.TextUnmarshaler   = (*Wrapper[int])(nil)
+	_ encoding.BinaryMarshaler   = (*Wrapper[int])(nil)
+	_ encoding.BinaryUnmarshaler = (*Wrapper[int])(nil)
+	_ driver.Valuer              = (*Wrapper[int])(nil)
+	_ sql.Scanner                = (*Wrapper[int])(nil)
+)
 
 // NewWrapper creates a new Wrapper with the given labels.
 func NewWrapper[T Value](labels ...string) Wrapper[T] {
