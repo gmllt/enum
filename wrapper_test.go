@@ -797,3 +797,102 @@ func TestWrapperSQLRoundTrip(t *testing.T) {
 		})
 	}
 }
+
+// TestWrapperEnsureEnum tests the lazy initialization of Enum through ensureEnum()
+func TestWrapperEnsureEnum(t *testing.T) {
+	// Create a wrapper with labels but nil Enum (simulating deserialization scenario)
+	labels := []string{"red", "green", "blue"}
+	wrapper := Wrapper[int]{
+		Enum:    nil, // Simulate a deserialized state where Enum might be nil
+		Current: 1,
+		labels:  labels,
+	}
+
+	// Test that ensureEnum() works through UnmarshalJSON
+	jsonData := []byte(`"green"`)
+	err := wrapper.UnmarshalJSON(jsonData)
+	if err != nil {
+		t.Fatalf("UnmarshalJSON failed: %v", err)
+	}
+
+	// Verify that the Enum was properly initialized
+	if wrapper.Enum == nil {
+		t.Fatal("ensureEnum() did not initialize the Enum")
+	}
+
+	// Verify that the labels were properly set
+	if !reflect.DeepEqual(wrapper.Enum.labels, labels) {
+		t.Errorf("expected labels %v, got %v", labels, wrapper.Enum.labels)
+	}
+
+	// Verify that the value was correctly unmarshaled
+	if wrapper.Current != 1 {
+		t.Errorf("expected current value 1, got %d", wrapper.Current)
+	}
+}
+
+// TestWrapperEnsureEnumWithAllUnmarshalMethods tests ensureEnum through all unmarshal methods
+func TestWrapperEnsureEnumWithAllUnmarshalMethods(t *testing.T) {
+	labels := []string{"small", "medium", "large"}
+
+	testCases := []struct {
+		name   string
+		testFn func(*Wrapper[int]) error
+	}{
+		{
+			name: "UnmarshalJSON",
+			testFn: func(w *Wrapper[int]) error {
+				return w.UnmarshalJSON([]byte(`"medium"`))
+			},
+		},
+		{
+			name: "UnmarshalText",
+			testFn: func(w *Wrapper[int]) error {
+				return w.UnmarshalText([]byte("large"))
+			},
+		},
+		{
+			name: "UnmarshalBinary",
+			testFn: func(w *Wrapper[int]) error {
+				// Create binary data for "small" (2-byte length + "small")
+				data := make([]byte, 2+5)
+				binary.BigEndian.PutUint16(data[:2], 5) // length of "small"
+				copy(data[2:], "small")
+				return w.UnmarshalBinary(data)
+			},
+		},
+		{
+			name: "Scan",
+			testFn: func(w *Wrapper[int]) error {
+				return w.Scan("medium")
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Create wrapper with nil Enum but valid labels
+			wrapper := Wrapper[int]{
+				Enum:    nil,
+				Current: 0,
+				labels:  labels,
+			}
+
+			// Test the unmarshal method
+			err := tc.testFn(&wrapper)
+			if err != nil {
+				t.Fatalf("%s failed: %v", tc.name, err)
+			}
+
+			// Verify that ensureEnum() worked
+			if wrapper.Enum == nil {
+				t.Fatalf("ensureEnum() did not initialize the Enum in %s", tc.name)
+			}
+
+			// Verify labels are correct
+			if !reflect.DeepEqual(wrapper.Enum.labels, labels) {
+				t.Errorf("expected labels %v, got %v", labels, wrapper.Enum.labels)
+			}
+		})
+	}
+}
