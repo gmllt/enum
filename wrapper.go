@@ -30,6 +30,7 @@ var (
 
 // NewWrapper creates a new Wrapper with the given labels.
 func NewWrapper[T Value](labels ...string) Wrapper[T] {
+	Register[T](labels...)
 	e := NewEnum[T](labels...)
 	return Wrapper[T]{
 		Enum:   e,
@@ -54,8 +55,13 @@ func (w Wrapper[T]) Labels() []string {
 
 // ensureEnum initializes the Enum if it is nil and labels are provided.
 func (w *Wrapper[T]) ensureEnum() {
-	if w.Enum == nil && w.labels != nil {
-		w.Enum = NewEnum[T](w.labels...)
+	if w.Enum == nil {
+		if w.labels != nil {
+			w.Enum = NewEnum[T](w.labels...)
+		} else if labels := GetLabels[T](); labels != nil {
+			w.Enum = NewEnum[T](labels...)
+			w.labels = labels
+		}
 	}
 }
 
